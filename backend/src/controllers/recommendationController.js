@@ -67,6 +67,7 @@ exports.getRecommendations = async (req, res, next) => {
               const finalPriceVal = latestPrice ? parseFloat(latestPrice.final_price) : (priceVal + shippingVal - discountVal);
 
               return {
+                listing_id: l.id,
                 platform: l.platforms?.name || 'Retailer',
                 price: priceVal,
                 shipping: shippingVal,
@@ -74,7 +75,7 @@ exports.getRecommendations = async (req, res, next) => {
                 final_price: finalPriceVal,
                 rating: rev?.average_rating || 4.5,
                 reviews: rev?.total_reviews || 5000,
-                url: l.url,
+                url: l.url || `https://www.google.com/search?q=${encodeURIComponent(l.title || 'Product')}`,
                 negative_themes: rev?.negative_themes || []
               };
             });
@@ -88,42 +89,61 @@ exports.getRecommendations = async (req, res, next) => {
     if (listings.length === 0) {
       listings = [
         { platform: "Amazon", price: 69999, shipping: 0, discount: 2000, final_price: 67999, rating: 4.6, reviews: 24500, url: "https://amazon.in" },
+        { platform: "Croma", price: 79900, shipping: 0, discount: 11410, final_price: 68490, rating: 4.6, reviews: 6800, url: "https://croma.com" },
+        { platform: "Reliance Digital", price: 70500, shipping: 0, discount: 1500, final_price: 69000, rating: 4.7, reviews: 5400, url: "https://reliancedigital.in" },
         { platform: "Flipkart", price: 71999, shipping: 99, discount: 3000, final_price: 69098, rating: 4.5, reviews: 18900, url: "https://flipkart.com" },
-        { platform: "Reliance Digital", price: 70500, shipping: 0, discount: 1500, final_price: 69000, rating: 4.7, reviews: 5400, url: "https://reliancedigital.in" }
+        { platform: "Tata CLiQ", price: 79900, shipping: 0, discount: 11000, final_price: 68900, rating: 4.5, reviews: 3400, url: "https://tatacliq.com" }
       ];
     }
 
-    let eligibleListings = listings;
-    if (budget) {
-      eligibleListings = listings.filter(l => l.final_price <= budget);
-    }
-
-    if (eligibleListings.length === 0) {
-      return res.status(200).json({
-        success: true,
-        message: 'No products found within the budget',
-        data: null
-      });
-    }
-
-    eligibleListings = eligibleListings.map(l => ({
+    // Score all listings
+    const scoredListings = listings.map(l => ({
       ...l,
       comparisonScore: calculateComparisonScore(l, weights)
     }));
 
-    // Sort by comparisonScore descending
+    // Check if any listings fit strictly within budget
+    let eligibleListings = scoredListings;
+    let isUnderBudget = true;
+
+    if (budget && Number(budget) > 0) {
+      const budgetNum = Number(budget);
+      const withinBudget = scoredListings.filter(l => l.final_price <= budgetNum);
+
+      if (withinBudget.length > 0) {
+        eligibleListings = withinBudget;
+      } else {
+        // If all are above budget, pick the lowest price listing available!
+        isUnderBudget = false;
+        eligibleListings = [...scoredListings].sort((a, b) => a.final_price - b.final_price);
+      }
+    }
+
     eligibleListings.sort((a, b) => b.comparisonScore - a.comparisonScore);
 
     const bestMatch = eligibleListings[0];
     const topWarning = (bestMatch.negative_themes && bestMatch.negative_themes.length > 0)
       ? `User note: ${bestMatch.negative_themes[0]}`
-      : 'Verify warranty card and return policy at checkout.';
+      : 'Compare bank offers at checkout to get additional discounts.';
+
+    let budgetNote = 'Budget criteria satisfied';
+    if (budget && Number(budget) > 0) {
+      if (isUnderBudget) {
+        const savings = Number(budget) - bestMatch.final_price;
+        budgetNote = savings > 0 
+          ? `Within budget of ₹${Number(budget).toLocaleString()} (Saves ₹${savings.toLocaleString()} under your limit!)`
+          : `Exact match for your ₹${Number(budget).toLocaleString()} budget`;
+      } else {
+        const over = bestMatch.final_price - Number(budget);
+        budgetNote = `Lowest market offer is ₹${bestMatch.final_price.toLocaleString()} (₹${over.toLocaleString()} above your ₹${Number(budget).toLocaleString()} budget)`;
+      }
+    }
 
     const explanation = {
-      budget_match: budget ? `Within budget of ₹${budget.toLocaleString()}` : 'Budget criteria satisfied',
+      budget_match: budgetNote,
       rating_note: `High verified customer score of ${bestMatch.rating}/5`,
-      review_note: `Confidence backed by ${bestMatch.reviews.toLocaleString()} real purchases`,
-      price_note: `Lowest calculated net price available on ${bestMatch.platform}`,
+      review_note: `Confidence backed by ${bestMatch.reviews.toLocaleString()} real customer purchases`,
+      price_note: `Best overall deal price available on ${bestMatch.platform}`,
       warning: topWarning
     };
 

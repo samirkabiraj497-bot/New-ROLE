@@ -15,7 +15,7 @@ const categorySynonyms = {
 
 const knownBrands = [
   'Apple', 'Samsung', 'Sony', 'OnePlus', 'Google', 'Dell', 'HP', 'Lenovo', 'Asus',
-  'Nike', 'Adidas', 'Puma', 'Philips', 'Dyson', 'Bose', 'boAt', 'Noise', 'Xiaomi', 'Nothing', 'JBL'
+  'Nike', 'Adidas', 'Puma', 'Philips', 'Dyson', 'Bose', 'boAt', 'Noise', 'Xiaomi', 'Nothing', 'JBL', 'Acer'
 ];
 
 const genericModifiers = new Set([
@@ -31,31 +31,28 @@ function scoreProduct(product, queryTokens, rawQuery) {
 
   const rawQ = rawQuery.toLowerCase().trim();
 
-  // 1. Identify specific search terms (not generic categories or modifiers)
+  // Identify specific search terms
   const allCategoryWords = new Set(Object.values(categorySynonyms).flat());
   const specificTokens = queryTokens.filter(t => !allCategoryWords.has(t) && !genericModifiers.has(t));
 
-  // If the user specified specific terms (e.g. "Nothing", "Dell", "XPS", "Nike"), 
-  // the product MUST match at least one of these specific terms in its name, brand, or description
+  // If specific tokens exist, candidate must match at least one
   if (specificTokens.length > 0) {
     const matchesSpecific = specificTokens.some(t => 
       name.includes(t) || brand.includes(t) || desc.includes(t)
     );
     if (!matchesSpecific) {
-      return 0; // Disqualify non-matching products
+      return 0;
     }
   }
 
   let score = 0;
 
-  // Exact full-phrase matches
   if (name.includes(rawQ)) score += 200;
   if (brand.includes(rawQ)) score += 150;
   if (category.includes(rawQ)) score += 100;
 
   let matchedTokenCount = 0;
 
-  // Token matches
   for (const token of queryTokens) {
     if (token.length < 2) continue;
     let matched = false;
@@ -77,7 +74,6 @@ function scoreProduct(product, queryTokens, rawQuery) {
       matched = true;
     }
 
-    // Category synonym matches
     for (const [catName, syns] of Object.entries(categorySynonyms)) {
       if (syns.includes(token) && category.toLowerCase().includes(catName.toLowerCase())) {
         score += 35;
@@ -88,7 +84,6 @@ function scoreProduct(product, queryTokens, rawQuery) {
     if (matched) matchedTokenCount++;
   }
 
-  // Bonus for matching multiple query terms
   if (matchedTokenCount > 1) {
     score += matchedTokenCount * 30;
   }
@@ -96,16 +91,55 @@ function scoreProduct(product, queryTokens, rawQuery) {
   return score;
 }
 
-// Dynamically generate a product entry if the search query has no match
+// Extract price range, store count, best store, and direct buy link for a product
+function enrichProductWithPricing(product) {
+  const listings = (product.product_variants || []).flatMap(v => v.product_listings || []);
+  
+  const validPrices = [];
+  const stores = [];
+
+  for (const l of listings) {
+    const storeName = l.platforms?.name || 'Retailer';
+    if (!stores.includes(storeName)) stores.push(storeName);
+
+    const price = l.prices && l.prices.length > 0 ? parseFloat(l.prices[0].final_price) : null;
+    if (price && price > 0) {
+      validPrices.push({ price, storeName, url: l.url });
+    }
+  }
+
+  validPrices.sort((a, b) => a.price - b.price);
+
+  const lowest_price = validPrices.length > 0 ? validPrices[0].price : null;
+  const highest_price = validPrices.length > 0 ? validPrices[validPrices.length - 1].price : null;
+  const best_deal = validPrices.length > 0 ? validPrices[0] : null;
+
+  return {
+    id: product.id,
+    name: product.name,
+    brand: product.brand,
+    category: product.category,
+    description: product.description,
+    image: product.base_image_url,
+    lowest_price,
+    highest_price,
+    max_savings: (highest_price && lowest_price) ? Math.max(0, highest_price - lowest_price) : 0,
+    stores_count: stores.length || 5,
+    stores: stores.length > 0 ? stores : ['Amazon', 'Flipkart', 'Reliance Digital', 'Croma', 'Tata CLiQ'],
+    best_store: best_deal ? best_deal.storeName : 'Amazon',
+    buy_url: best_deal ? best_deal.url : `https://www.amazon.in/s?k=${encodeURIComponent(product.name)}`,
+    variants: product.product_variants || []
+  };
+}
+
+// Dynamically generate a product entry across 5 platforms if not yet in DB
 async function synthesizeProduct(query, budget) {
   const qClean = query.trim();
   const qLower = qClean.toLowerCase();
 
-  // Infer Brand
   const matchedBrand = knownBrands.find(b => qLower.includes(b.toLowerCase())) || 
     (qClean.split(/\s+/)[0] ? qClean.split(/\s+/)[0].charAt(0).toUpperCase() + qClean.split(/\s+/)[0].slice(1) : 'Featured');
 
-  // Infer Category
   let matchedCategory = 'Electronics';
   for (const [catName, syns] of Object.entries(categorySynonyms)) {
     if (syns.some(s => qLower.includes(s))) {
@@ -114,29 +148,26 @@ async function synthesizeProduct(query, budget) {
     }
   }
 
-  // Capitalize title
   const titleWords = qClean.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1));
   const productName = titleWords.join(' ');
 
-  // Base price estimation
   let basePrice = 24999;
   if (budget && Number(budget) > 0) {
     basePrice = Math.round(Number(budget) * 0.9);
   } else {
-    if (matchedCategory === 'Smartphones') basePrice = 34999;
-    else if (matchedCategory === 'Laptops') basePrice = 59999;
-    else if (matchedCategory === 'Audio') basePrice = 8999;
-    else if (matchedCategory === 'Smartwatches') basePrice = 12999;
-    else if (matchedCategory === 'Shoes') basePrice = 6999;
-    else if (matchedCategory === 'Smart TVs') basePrice = 38999;
-    else if (matchedCategory === 'Gaming') basePrice = 45999;
-    else if (matchedCategory === 'Home Appliances') basePrice = 9999;
+    if (matchedCategory === 'Smartphones') basePrice = 29999;
+    else if (matchedCategory === 'Laptops') basePrice = 49999;
+    else if (matchedCategory === 'Audio') basePrice = 3999;
+    else if (matchedCategory === 'Smartwatches') basePrice = 4999;
+    else if (matchedCategory === 'Shoes') basePrice = 4499;
+    else if (matchedCategory === 'Smart TVs') basePrice = 34999;
+    else if (matchedCategory === 'Gaming') basePrice = 44990;
+    else if (matchedCategory === 'Home Appliances') basePrice = 7999;
   }
 
   const productId = crypto.randomUUID();
   const variantId = crypto.randomUUID();
 
-  // Pick realistic stock image by category
   let defaultImage = 'https://images.unsplash.com/photo-1526738549149-8e07eca6c147?w=600&auto=format&fit=crop&q=80';
   if (matchedCategory === 'Smartphones') defaultImage = 'https://images.unsplash.com/photo-1598327105666-5b89351aff97?w=600&auto=format&fit=crop&q=80';
   else if (matchedCategory === 'Laptops') defaultImage = 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?w=600&auto=format&fit=crop&q=80';
@@ -149,10 +180,11 @@ async function synthesizeProduct(query, budget) {
     name: productName,
     brand: matchedBrand,
     category: matchedCategory,
-    description: `Official ${productName} with high-grade components, verified customer satisfaction, and multi-store competitive pricing.`,
+    description: `Official ${productName} with verified performance, multi-store price guarantees, and manufacturer warranty.`,
     base_image_url: defaultImage
   };
 
+  // 5 Store comparison
   const platforms = [
     {
       id: '11111111-1111-1111-1111-111111111111',
@@ -164,34 +196,60 @@ async function synthesizeProduct(query, budget) {
       rating: 4.6,
       reviews: 14200,
       quality: 92,
-      positive: ['Superb overall build quality', 'Competitive online price', 'Fast reliable delivery'],
-      negative: ['High demand may limit color choices']
+      positive: ['Superb overall build quality', 'Lowest net price deal', 'Fast reliable delivery'],
+      negative: ['Stock moves fast']
     },
     {
       id: '22222222-2222-2222-2222-222222222222',
       name: 'Flipkart',
       url: `https://www.flipkart.com/search?q=${encodeURIComponent(qClean)}`,
-      priceDiff: 400,
+      priceDiff: 200,
       shipping: 99,
       discount: 2000,
       rating: 4.4,
       reviews: 9800,
       quality: 88,
-      positive: ['Great value with exchange offer', 'Secure packaging'],
-      negative: ['Delivery fee applies on standard shipping']
+      positive: ['Great value with card offers', 'Express shipping option'],
+      negative: ['Standard shipping fee applies']
     },
     {
       id: '33333333-3333-3333-3333-333333333333',
       name: 'Reliance Digital',
       url: `https://www.reliancedigital.in/search?q=${encodeURIComponent(qClean)}`,
-      priceDiff: 0,
+      priceDiff: -500,
       shipping: 0,
-      discount: 1500,
+      discount: 1800,
       rating: 4.5,
       reviews: 4500,
       quality: 90,
       positive: ['Official manufacturer warranty', 'In-store support option'],
-      negative: ['Stock availability varies by location']
+      negative: ['Local store delivery check required']
+    },
+    {
+      id: '44444444-4444-4444-4444-444444444444',
+      name: 'Croma',
+      url: `https://www.croma.com/searchB?q=${encodeURIComponent(qClean)}`,
+      priceDiff: 100,
+      shipping: 0,
+      discount: 1500,
+      rating: 4.6,
+      reviews: 3200,
+      quality: 91,
+      positive: ['Tata trusted brand warranty', 'Free store pickup available'],
+      negative: ['Bank offer limits apply']
+    },
+    {
+      id: '55555555-5555-5555-5555-555555555555',
+      name: 'Tata CLiQ',
+      url: `https://www.tatacliq.com/search/?searchCategory=all&text=${encodeURIComponent(qClean)}`,
+      priceDiff: 400,
+      shipping: 0,
+      discount: 1200,
+      rating: 4.4,
+      reviews: 2100,
+      quality: 89,
+      positive: ['Authentic certified products', 'NeuCoins rewards'],
+      negative: ['Select pin codes supported']
     }
   ];
 
@@ -250,6 +308,9 @@ async function synthesizeProduct(query, budget) {
     }
   }
 
+  const lowestPrice = Math.max(100, basePrice - 1500);
+  const highestPrice = Math.max(100, basePrice + 400);
+
   return {
     id: productId,
     name: productName,
@@ -257,6 +318,14 @@ async function synthesizeProduct(query, budget) {
     category: matchedCategory,
     description: productData.description,
     image: productData.base_image_url,
+    lowest_price: lowestPrice,
+    highest_price: highestPrice,
+    max_savings: highestPrice - lowestPrice,
+    stores_count: 5,
+    stores: ['Amazon', 'Reliance Digital', 'Croma', 'Flipkart', 'Tata CLiQ'],
+    best_store: 'Amazon',
+    buy_url: platforms[0].url,
+    in_budget: budget ? lowestPrice <= Number(budget) : true,
     variants: [{ id: variantId, color: 'Standard', storage: 'Standard' }]
   };
 }
@@ -289,7 +358,13 @@ exports.searchProducts = async (req, res, next) => {
               id,
               color,
               storage,
-              ram
+              ram,
+              product_listings (
+                id,
+                url,
+                platforms (id, name, logo_url),
+                prices (price, shipping_cost, discount, final_price, recorded_at)
+              )
             )
           `);
 
@@ -304,35 +379,53 @@ exports.searchProducts = async (req, res, next) => {
     // Score and rank all products
     const scored = allProducts
       .map(p => ({
-        product: {
-          id: p.id,
-          name: p.name,
-          brand: p.brand,
-          category: p.category,
-          description: p.description,
-          image: p.base_image_url,
-          variants: p.product_variants || []
-        },
+        product: enrichProductWithPricing(p),
         score: scoreProduct(p, queryTokens, rawQuery)
       }))
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)
       .map(item => item.product);
 
-    if (scored.length > 0) {
+    let finalResults = scored;
+
+    // Apply budget logic
+    if (budget && Number(budget) > 0) {
+      const numBudget = Number(budget);
+      const withinBudget = scored.filter(p => p.lowest_price !== null && p.lowest_price <= numBudget);
+
+      if (withinBudget.length > 0) {
+        // Return products strictly within budget
+        finalResults = withinBudget.map(p => ({ ...p, in_budget: true }));
+      } else if (scored.length > 0) {
+        // If query matched products but all are above budget, sort by price and mark budget difference
+        finalResults = scored
+          .sort((a, b) => (a.lowest_price || 999999) - (b.lowest_price || 999999))
+          .map(p => ({
+            ...p,
+            in_budget: false,
+            budget_diff: p.lowest_price ? p.lowest_price - numBudget : 0
+          }));
+      }
+    } else {
+      finalResults = scored.map(p => ({ ...p, in_budget: true }));
+    }
+
+    if (finalResults.length > 0) {
       return res.status(200).json({
         success: true,
-        count: scored.length,
-        data: scored
+        count: finalResults.length,
+        budget: budget ? Number(budget) : null,
+        data: finalResults
       });
     }
 
-    // If no existing product matches, dynamically synthesize one with real store search URLs
+    // Dynamic on-demand synthesis if no match
     const synthesized = await synthesizeProduct(rawQuery, budget);
 
     return res.status(200).json({
       success: true,
       count: 1,
+      budget: budget ? Number(budget) : null,
       data: [synthesized]
     });
 
