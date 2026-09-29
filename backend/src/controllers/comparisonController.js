@@ -5,34 +5,37 @@ const demoComparisons = {
     name: "Smartphone A",
     listings: [
       {
-        platform: "Platform A",
+        platform: "Amazon",
         price: 44999,
         shipping: 0,
         discount: 0,
         final_price: 44999,
         rating: 4.5,
         reviews: 12000,
-        availability: "In Stock"
+        availability: "In Stock",
+        url: "https://amazon.in/demo"
       },
       {
-        platform: "Platform B",
+        platform: "Flipkart",
         price: 46499,
         shipping: 99,
         discount: 500,
         final_price: 46098,
         rating: 4.4,
         reviews: 8500,
-        availability: "In Stock"
+        availability: "In Stock",
+        url: "https://flipkart.com/demo"
       },
       {
-        platform: "Platform C",
+        platform: "Reliance Digital",
         price: 45299,
         shipping: 0,
         discount: 0,
         final_price: 45299,
         rating: 4.6,
         reviews: 15000,
-        availability: "In Stock"
+        availability: "In Stock",
+        url: "https://reliancedigital.in/demo"
       }
     ]
   }

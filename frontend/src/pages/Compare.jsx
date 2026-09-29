@@ -109,6 +109,7 @@ const Compare = () => {
                   <th className="py-3 font-semibold text-gray-600">Price</th>
                   <th className="py-3 font-semibold text-gray-600">Shipping</th>
                   <th className="py-3 font-semibold text-gray-600">Final Price</th>
+                  <th className="py-3 font-semibold text-gray-600">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -118,6 +119,11 @@ const Compare = () => {
                     <td className="py-4 text-gray-600">₹{l.price.toLocaleString()}</td>
                     <td className="py-4 text-gray-600">{l.shipping > 0 ? `₹${l.shipping}` : 'Free'}</td>
                     <td className="py-4 font-bold text-gray-900">₹{l.final_price.toLocaleString()}</td>
+                    <td className="py-4">
+                      <a href={l.url || "#"} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 text-sm font-medium bg-blue-50 px-3 py-1 rounded-full border border-blue-200 hover:bg-blue-100 transition-colors">
+                        View Offer
+                      </a>
+                    </td>
                   </tr>
                 ))}
               </tbody>
