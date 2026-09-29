@@ -9,7 +9,8 @@ const api = axios.create({
   },
 });
 
-export const searchProducts = (query) => api.get(`/products/search?q=${query}`);
+export const searchProducts = (query, budget) => 
+  api.get(`/products/search?q=${encodeURIComponent(query)}${budget ? `&budget=${encodeURIComponent(budget)}` : ''}`);
 export const getProduct = (id) => api.get(`/products/${id}`);
 export const getComparison = (id) => api.get(`/comparisons/${id}/compare`);
 export const getQualityAnalysis = (id) => api.get(`/comparisons/${id}/quality`);
